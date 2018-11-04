@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>folds</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+      body {
+        color: #ffffff;
+        font-family:Monospace;
+        font-size:13px;
+        text-align:center;
+        font-weight: bold;
+        background-color: #000000;
+        margin: 0px;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="container"></div>
+
+    <script src="./three.js"></script>
+
+    <script type="x-shader/x-vertex" id="vertexshader">
+      uniform float amplitude;
+      uniform sampler2D uNormals;
+      uniform vec2 uInverseResolution;
+      attribute float displacement;
+      varying vec3 vNormal;
+      varying vec2 vUv;
+      varying float vOffset;
+      varying vec3 vPosition;
+      void main() {
+        vNormal = normal;
+        vUv = ( 0.5 + amplitude ) * uv + vec2( amplitude );
+        vUv = uv;
+        vOffset = amplitude * displacement;
+        vec3 newPosition = position + amplitude * normal * vec3( displacement );
+        vPosition = newPosition;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4( newPosition, 1.0 );
+      }
+    </script>
+
+    <script type="x-shader/x-fragment" id="fragmentshader">
+      uniform sampler2D uNormals;
+      uniform vec2 uInverseResolution;
+      varying vec3 vNormal;
+      varying vec2 vUv;
+      varying float vOffset;
+      varying vec3 vPosition;
+      void main() {
+        vec3 light = vec3( 0.5, 0.2, 1.0 );
+        light = normalize( light );
+        float dProd = dot( vNormal, light ) * 0.5 + 0.5;
+        vec4 tcolor = vec4(vUv.x, 0.0, vUv.y, 1.0);
+        vec4 gray = vec4( vec3( tcolor.r * 0.3 + tcolor.g * 0.59 + tcolor.b * 0.11 ), 1.0 );
+        gl_FragColor = gray * vec4( vec3( dProd ) * vec3( tcolor ), 1.0 );
+        gl_FragColor = vec4(vUv.x, 0.0, vUv.y, 1.0);
+
+        // float accel = max(dFdx(vOffset), dFdy(vOffset));
+        // gl_FragColor = vec4(accel, accel, accel, 1.0);
+
+        // vec3 normal = normalize(cross(dFdx(vPosition), dFdy(vPosition)));
+        // normal = normal * 0.5 + 0.5;
+        // gl_FragColor = vec4(normal.x, 0.0, normal.y, 1.0);
+
+        vec2 offsetX = vec2(1.0 * uInverseResolution.x, 0.0);
+        vec2 offsetY = vec2(0.0, 1.0 * uInverseResolution.y);
+        vec3 normalC = normalize(texture2D(uNormals, vUv).xyz * 2.0 - 1.0);
+        vec3 normalN = normalize(texture2D(uNormals, vUv - offsetY).xyz * 2.0 - 1.0);
+        vec3 normalS = normalize(texture2D(uNormals, vUv + offsetY).xyz * 2.0 - 1.0);
+        vec3 normalE = normalize(texture2D(uNormals, vUv + offsetX).xyz * 2.0 - 1.0);
+        vec3 normalW = normalize(texture2D(uNormals, vUv - offsetX).xyz * 2.0 - 1.0);
+        float accel = min(min(min(dot(normalC, normalN), dot(normalC, normalS)), dot(normalC, normalE)), dot(normalC, normalW));
+        accel = accel * -0.5 + 0.5;
+        vec3 normalDisplay = texture2D(uNormals, vUv).xyz;
+        gl_FragColor = vec4(vec3(accel), 1.0);
+
+        // vec4 normal = texture2D(uNormals, vUv);
+        // gl_FragColor = vec4(normal.xyz, 1.0);
+      }
+    </script>
+
+    <script type="x-shader/x-vertex" id="normalsvertexshader">
+      uniform float amplitude;
+      attribute float displacement;
+      varying vec3 vNormal;
+      varying vec2 vUv;
+      varying float vOffset;
+      varying vec3 vPosition;
+      void main() {
+        vNormal = normal;
+        vUv = ( 0.5 + amplitude ) * uv + vec2( amplitude );
+        vUv = uv;
+        vOffset = amplitude * displacement;
+        vec3 newPosition = position + amplitude * normal * vec3( displacement );
+        vPosition = newPosition;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4( newPosition, 1.0 );
+      }
+    </script>
+
+    <script type="x-shader/x-fragment" id="normalsfragmentshader">
+      varying vec3 vNormal;
+      varying vec2 vUv;
+      varying float vOffset;
+      varying vec3 vPosition;
+      void main() {
+        vec3 light = vec3( 0.5, 0.2, 1.0 );
+        light = normalize( light );
+        float dProd = dot( vNormal, light ) * 0.5 + 0.5;
+        vec4 tcolor = vec4(vUv.x, 0.0, vUv.y, 1.0);
+        vec4 gray = vec4( vec3( tcolor.r * 0.3 + tcolor.g * 0.59 + tcolor.b * 0.11 ), 1.0 );
+        gl_FragColor = gray * vec4( vec3( dProd ) * vec3( tcolor ), 1.0 );
+        gl_FragColor = vec4(vUv.x, 0.0, vUv.y, 1.0);
+
+        float accel = max(dFdx(vOffset), dFdy(vOffset));
+        gl_FragColor = vec4(accel, accel, accel, 1.0);
+
+        vec3 normal = normalize(cross(dFdx(vPosition), dFdy(vPosition)));
+        normal = normal * 0.5 + 0.5;
+        gl_FragColor = vec4(normal, 1.0);
+      }
+    </script>
+
+    <script type="x-shader/x-vertex" id="blurvertexshader">
+      varying vec2 vUV;
+
+      void main() {
+        vUV = uv;
+        gl_Position = vec4(position, 1.0);
+      }
+    </script>
+
+    <script type="x-shader/x-fragment" id="blurfragmentshader">
+      varying vec2 vUV;
+
+      uniform vec2 uInverseResolution;
+      uniform vec2 uDir;
+      uniform sampler2D uSource;
+
+      void main() {
+        vec4 sum = vec4(0.0);
+        sum += texture2D(uSource, vUV) * 0.204164;
+        sum += texture2D(uSource, vUV + uInverseResolution * uDir * 1.407333) * 0.304005;
+        sum += texture2D(uSource, vUV - uInverseResolution * uDir * 1.407333) * 0.304005;
+        sum += texture2D(uSource, vUV + uInverseResolution * uDir * 3.294215) * 0.093913;
+        sum += texture2D(uSource, vUV - uInverseResolution * uDir * 3.294215) * 0.093913;
+        gl_FragColor = sum;
+      }
+    </script>
+
+
+    <script>
+    var renderer, scene, camera;
+    var plane, uniforms;
+    var normalsScene, normalsPlane, normalsUniforms;
+    var displacement, noise;
+    var normalsTarget, edgesTarget, blurTarget;
+    var blurCamera, blurPlane, blurScene;
+    init();
+    animate();
+    function init() {
+      // okay heres the deal:
+      // yr gonna render once to target with ortho camera
+      // pass pos or disp or normal (vec3) as varying
+      // use ddx ddy to get accel??
+
+      // okay take two:
+      // pass 1 reconstruct normals from dFdns and render\
+      // pass 2 read normals in vert(?) shader and render based on angle between
+
+      orthoCamera = new THREE.OrthographicCamera(  -50, 50, 50, -50, 1, 10000 );
+      orthoCamera.position.z = 300;
+      perspCamera = new THREE.PerspectiveCamera( 30, window.innerWidth / window.innerHeight, 1, 10000 );
+      perspCamera.position.z = 300;
+      blurCamera = new THREE.OrthographicCamera();
+
+
+
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color( 0x050505 );
+
+
+
+
+      normalsScene = new THREE.Scene();
+      normalsScene.background = new THREE.Color( 0x050505 );
+
+
+
+
+
+      blurScene = new THREE.Scene();
+      blurScene.background = new THREE.Color( 0x050505 );
+
+
+
+
+      normalsTarget = new THREE.WebGLRenderTarget( window.innerWidth, window.innerHeight );
+      edgesTarget = new THREE.WebGLRenderTarget( window.innerWidth, window.innerHeight, { magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter } );
+      blurTarget = new THREE.WebGLRenderTarget( window.innerWidth, window.innerHeight, { magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter }  );
+
+
+
+
+
+      normalsUniforms = {
+        amplitude: { value: 1.0 },
+      };
+      var normalsShaderMaterial = new THREE.ShaderMaterial( {
+        uniforms: normalsUniforms,
+        vertexShader:document.getElementById( 'normalsvertexshader' ).textContent,
+        fragmentShader: document.getElementById( 'normalsfragmentshader' ).textContent,
+        extensions: {
+          derivatives: true
+        }
+      });
+
+
+
+
+      uniforms = {
+        amplitude: { value: 1.0 },
+        uNormals: { value: normalsTarget.texture },
+        uInverseResolution: { value: new THREE.Vector2(1 / window.innerWidth, 1 / window.innerHeight) }
+      };
+      var shaderMaterial = new THREE.ShaderMaterial( {
+        uniforms: uniforms,
+        vertexShader:document.getElementById( 'vertexshader' ).textContent,
+        fragmentShader: document.getElementById( 'fragmentshader' ).textContent,
+        extensions: {
+          derivatives: true
+        }
+      });
+
+
+
+      var radius = 100, segments = 10, rings = 64;
+      var geometry = new THREE.PlaneBufferGeometry(radius, radius, segments, segments);
+      displacement = new Float32Array( geometry.attributes.position.count );
+      noise = new Float32Array( geometry.attributes.position.count );
+      for ( var i = 0; i < displacement.length; i ++ ) {
+        noise[ i ] = 10 * (Math.random() * 2 - 1);
+      }
+      geometry.addAttribute( 'displacement', new THREE.BufferAttribute( displacement, 1 ) );
+
+
+
+
+      plane = new THREE.Mesh( geometry, shaderMaterial );
+      scene.add( plane );
+
+
+
+
+
+
+      normalsPlane = new THREE.Mesh( geometry, normalsShaderMaterial );
+      normalsScene.add( normalsPlane );
+
+
+
+
+
+
+      blurPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(2, 2),
+        new THREE.ShaderMaterial({
+          uniforms: {
+            uInverseResolution: { value: new THREE.Vector2(1 / window.innerWidth, 1 / window.innerHeight) },
+            uDir: { value: new THREE.Vector2(1, 0) },
+            uSource: { value: edgesTarget.texture }
+          },
+          vertexShader: document.getElementById( 'blurvertexshader' ).textContent,
+          fragmentShader: document.getElementById( 'blurfragmentshader' ).textContent
+        })
+      );
+      blurScene.add(blurPlane);
+
+
+
+
+
+      renderer = new THREE.WebGLRenderer();
+      renderer.setPixelRatio( window.devicePixelRatio );
+      renderer.setSize( window.innerWidth, window.innerHeight );
+      var container = document.getElementById( 'container' );
+      container.appendChild( renderer.domElement );
+      //
+      window.addEventListener( 'resize', onWindowResize, false );
+    }
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize( window.innerWidth, window.innerHeight );
+    }
+    function animate() {
+      requestAnimationFrame( animate );
+      render();
+    }
+    function render() {
+      var time = Date.now() * 0.01;
+      uniforms.amplitude.value = 2.5 * Math.sin( time * 0.00125 );
+      for ( var i = 0; i < displacement.length; i ++ ) {
+        displacement[ i ] = 10 * Math.sin( i + time );
+        // noise[ i ] += 0.5 * ( 0.5 - 0.5 );
+        // noise[ i ] = THREE.Math.clamp( noise[ i ], -5, 5 );
+        displacement[ i ] += noise[ i ];
+      }
+      plane.geometry.attributes.displacement.needsUpdate = true;
+
+      renderer.render( normalsScene, orthoCamera, normalsTarget );
+      renderer.render( scene, orthoCamera, edgesTarget );
+      blurPlane.material.uniforms.uDir.value = new THREE.Vector2(1, 0);
+      blurPlane.material.uniforms.uSource.value = edgesTarget.texture;
+      renderer.render( blurScene, blurCamera, blurTarget );
+      blurPlane.material.uniforms.uDir.value = new THREE.Vector2(0, 1);
+      blurPlane.material.uniforms.uSource.value = blurTarget.texture;
+      renderer.render( blurScene, blurCamera );
+      // renderer.render( scene, perspCamera );
+    }
+  </script>
+
+</body>
+
+</html>
