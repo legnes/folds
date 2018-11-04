@@ -1,15 +1,18 @@
 (function() {
 // REF: https://threejs.org/examples/#webgl_custom_attributes
 // TODO:
-//    o Refactor everything
 //    o Implement crumple
-//    o Visualize fold axis
 //    o Combine displacement attributes
 //    o Replace UV with pic/something else
-//    o Tweak folds?
+//    o Tweak edge and/or blur?
 //    o Expose paper size/shape/segments in inputs?
 //    o Tweak paper frag?
 //    o Switch between linear and nearest filters on temp targets?
+//    o Smarter normals? (octahedron encoding + float32 --> int8,8)
+//    o Expose edge thickness control?
+//    o Fix edge center shadow
+//    o Combine event handlers
+//    o Framerate???
 
 //////////////////////////////////////////////////////////////////
 // INIT //////////////////////////////////////////////////////////
@@ -124,6 +127,10 @@ function initMeshes() {
 
   _fullScreenQuadMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), _edgesPassMaterial);
   _fullScreenQuadScene.add(_fullScreenQuadMesh);
+
+  _axisGeometry = new THREE.BufferGeometry().setFromPoints([[0, 0, 0], [0, 0, 0]]);
+  _axisMesh = new THREE.Line(_axisGeometry, new THREE.LineDashedMaterial({color: 0x88ff88, dashSize: 1, gapSize: 1 }));
+  _axisMesh.computeLineDistances();
 }
 
 function initRenderer() {
@@ -138,10 +145,13 @@ function initWindow() {
   container.appendChild(_renderer.domElement);
 
   window.addEventListener('resize', onWindowResize, false);
-  window.addEventListener('mousedown', trackEventPosition.bind(null, 'lastMouseDownPosition'));
-  window.addEventListener('mouseup', trackEventPosition.bind(null, 'lastMouseUpPosition'));
+  window.addEventListener('mousedown', trackMouseEvent.bind(null, 'lastMouseDownPosition'));
+  window.addEventListener('mouseup', trackMouseEvent.bind(null, 'lastMouseUpPosition'));
+  window.addEventListener('mousemove', trackMouseEvent.bind(null, 'lastMouseMovePosition'));
   window.addEventListener('mouseup', fold);
   window.addEventListener('keypress', unfold);
+  window.addEventListener('mousedown', updateAxis);
+  window.addEventListener('mousemove', updateAxis);
 }
 // INIT //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
@@ -171,8 +181,13 @@ function onWindowResize() {
   _renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-function trackEventPosition(stateProperty, evt) {
-  if (evt.shiftKey) return true;
+function validateMouseEvent(evt) {
+  return (evt.target.tagName === 'CANVAS' && !evt.shiftKey);
+}
+
+function trackMouseEvent(stateProperty, evt) {
+  if (!validateMouseEvent(evt)) return true;
+  _inputState.lmbDown = evt.buttons > 0 && (evt.buttons % 2 === 1);
   // REF: https://stackoverflow.com/questions/13055214/mouse-canvas-x-y-to-three-js-world-x-y-z
   _inputState.lastEventRay.set((evt.clientX / window.innerWidth) * 2 - 1, -(evt.clientY / window.innerHeight) * 2 + 1, 0.5);
   _inputState.lastEventRay.unproject(_paperPerspectiveCamera);
@@ -182,6 +197,16 @@ function trackEventPosition(stateProperty, evt) {
   return true;
 }
 
+var updateAxis = (function() {
+  var axisSeg = [];
+  return function(evt) {
+    axisSeg[0] = _inputState.lastMouseDownPosition;
+    axisSeg[1] = _inputState.lastMouseMovePosition;
+    _axisGeometry.setFromPoints(axisSeg);
+    _axisMesh.computeLineDistances();
+  };
+})();
+
 var fold = (function() {
   var paperPos = new THREE.Vector3();
   var foldVec = new THREE.Vector3();
@@ -189,7 +214,7 @@ var fold = (function() {
   var tempVec2 = new THREE.Vector3();
 
   return function(evt) {
-    if (evt.shiftKey) return;
+    if (!validateMouseEvent(evt)) return true;
     // REF: https://math.stackexchange.com/questions/65503/point-reflection-over-a-line
     foldVec.copy(_inputState.lastMouseUpPosition).sub(_inputState.lastMouseDownPosition)
     var a = (foldVec.x * foldVec.x - foldVec.y * foldVec.y) / (foldVec.x * foldVec.x + foldVec.y * foldVec.y);
@@ -264,6 +289,7 @@ function render() {
   // Passes
   _paperMesh.material = _normalsPassMaterial;
   _normalsPassMaterial.uniforms.uTime.value = animationDeltaTime;
+  _paperScene.remove(_axisMesh);
   _renderer.render(_paperScene, _paperOrthoCamera, _tempTargetA, true);
   if (_inputs.visualizePass === 'normals') return displayTarget(_tempTargetA);
 
@@ -300,26 +326,9 @@ function render() {
   _paperMesh.material = _paperPassMaterial;
   _paperPassMaterial.uniforms.uSource.value = _tempTargetA.texture;
   _paperPassMaterial.uniforms.uTime.value = animationDeltaTime;
+  if (_inputState.lmbDown) _paperScene.add(_axisMesh);
   _renderer.setClearColor(new THREE.Color(0x000000), 1);
   _renderer.render(_paperScene, _paperPerspectiveCamera, null, true);
-
-  // REF
-
-  // Next youre going to render the second blur pass onto the fold accumulator target
-  // then add that target to the paper texture and use the result as the texture
-  // for simple phong (or something) rendering of the paper.
-  // Could also pass in the fold accumulation in addition to the main texture to the paper _renderer.
-
-  // Cool so this is all more or less working only the blending isn't working
-  // So next make sure you're clearing to the right colors and doing blending right
-
-  // Okay you got blending working between the base image (in this case the uv pass) and the folds
-  // Next you need to actually accumulate the folds onto the fold target accumulation target
-  // You're dynamically setting autoClear and material blending mode but it's still not working
-
-  // Alright so you got accumulation working, but it looks kinda weird.
-  // I think you need a blend mode that does like a max instead of add? Is that a thing?
-  // It is! I guess next is to fix the movement?
 }
 // RENDERING /////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
@@ -342,29 +351,34 @@ function init() {
 }
 
 // Shared local variables
-// numbers and constants
+// settings
 var PAPER_SIZE = 120;
 var PAPER_SEGMENTS = 400;
 var HALF_PAPER_SIZE = PAPER_SIZE / 2;
+// util constants
 var HORIZONTAL_DIR = new THREE.Vector2(1, 0);
 var VERTICAL_DIR = new THREE.Vector2(0, 1);
 
 // input variables
 var _inputs;
 // animation and control
-var _paperGeometry,
-    _startDisplacement,
-    _endDisplacement,
-    _animationStartTime;
 var _inputState = {
   lastEventRay: new THREE.Vector3(),
   lastMouseDownPosition: new THREE.Vector3(),
-  lastMouseUpPosition: new THREE.Vector3()
+  lastMouseUpPosition: new THREE.Vector3(),
+  lastMouseMovePosition: new THREE.Vector3(),
+  lmbDown: false
 };
+var _paperGeometry,
+    _axisGeometry,
+    _startDisplacement,
+    _endDisplacement,
+    _animationStartTime;
 // rendering
 var _renderer;
 // paper
 var _paperMesh,
+    _axisMesh,
     _paperScene,
     _paperOrthoCamera,
     _paperPerspectiveCamera,
@@ -376,14 +390,14 @@ var _fullScreenQuadMesh,
 // materials
 var _normalsPassMaterial,
     _edgesPassMaterial,
-    _blurPassMaterial;
-// targets
-var _tempTargetA,
-    _tempTargetB,
-    _foldAccumulationTarget,
+    _blurPassMaterial,
     _uvPassMaterial,
     _foldPassMaterial,
     _paperPassMaterial;
+// targets
+var _tempTargetA,
+    _tempTargetB,
+    _foldAccumulationTarget;
 
 init();
 tick();
