@@ -5,14 +5,15 @@
 //    o Combine displacement attributes
 //    o Replace UV with pic/something else
 //    o Tweak edge and/or blur?
-//    o Expose paper size/shape/segments in inputs?
 //    o Tweak paper frag?
 //    o Switch between linear and nearest filters on temp targets?
 //    o Smarter normals? (octahedron encoding + float32 --> int8,8)
-//    o Expose edge thickness control?
 //    o Fix edge center shadow
-//    o Combine event handlers
+//    o Expose paper size/shape/segments in inputs?
+//    o Expose edge thickness control?
+//    o Combine event handlers?
 //    o Framerate???
+//    o SOUNDS!!!!!!!!!
 
 //////////////////////////////////////////////////////////////////
 // INIT //////////////////////////////////////////////////////////
@@ -118,8 +119,9 @@ function initMaterials() {
 
 function initMeshes() {
   _paperGeometry = new THREE.PlaneBufferGeometry(PAPER_SIZE, PAPER_SIZE, PAPER_SEGMENTS, PAPER_SEGMENTS);
-  _startDisplacement = new Float32Array(_paperGeometry.attributes.position.count * 3);
-  _endDisplacement = new Float32Array(_paperGeometry.attributes.position.count * 3);
+  _vertCount = _paperGeometry.attributes.position.count;
+  _startDisplacement = new Float32Array(_vertCount * 3);
+  _endDisplacement = new Float32Array(_vertCount * 3);
   _paperGeometry.addAttribute('aDisplacementStart', new THREE.BufferAttribute(_startDisplacement, 3));
   _paperGeometry.addAttribute('aDisplacementEnd', new THREE.BufferAttribute(_endDisplacement, 3));
   _paperMesh = new THREE.Mesh(_paperGeometry, _normalsPassMaterial);
@@ -152,6 +154,13 @@ function initWindow() {
   window.addEventListener('keypress', unfold);
   window.addEventListener('mousedown', updateAxis);
   window.addEventListener('mousemove', updateAxis);
+  window.addEventListener('keypress', stopAudio);
+}
+
+function initAudio() {
+  _realFrequencies = new Float32Array(FREQUENCY_RANGE + 1);
+  _imaginaryFrequencies = new Float32Array(FREQUENCY_RANGE + 1);
+  _audioContext = new AudioContext();
 }
 // INIT //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
@@ -197,6 +206,66 @@ function trackMouseEvent(stateProperty, evt) {
   return true;
 }
 
+function fadeAudio(startSrc, endSrc, startTime, startGain, endGain) {
+  if (!startTime) {
+    startTime = Date.now();
+    if (startSrc) {
+      startGain = _audioContext.createGain();
+      startGain.gain.value = 1;
+      startSrc.disconnect();
+      startSrc.connect(startGain);
+      startGain.connect(_audioContext.destination);
+    }
+    if (endSrc) {
+      endGain = _audioContext.createGain();
+      endGain.gain.value = 0;
+      endSrc.disconnect();
+      endSrc.connect(endGain);
+      endGain.connect(_audioContext.destination);
+    }
+  }
+
+  var t = (Date.now() - startTime) / 1000;
+
+  if (t >= 1) {
+    if (startSrc) {
+      startSrc.stop(0);
+      startSrc.disconnect();
+    }
+    if (endGain) {
+      endGain.gain.value = 1;
+    }
+  } else {
+    // TODO: remap t?
+    if (startGain) startGain.gain.value = 1 - t;
+    if (endGain) endGain.gain.value = t;
+    requestAnimationFrame(fadeAudio.bind(null, startSrc, endSrc, startTime, startGain, endGain));
+  }
+}
+
+function stopAudio(evt) {
+  if (evt.key === 'm') fadeAudio(_oscillator);
+}
+
+function foldAudio(freq) {
+  // TODO: add more degs of freedom...this is samey (distortion?)
+  freq = Math.max(Math.min(freq * FREQUENCY_RANGE - 1, _imaginaryFrequencies.length - 1), 0);
+  if (freq === 0 || freq === 1) return;
+  var freqFloor = Math.floor(freq);
+  var freqFrac = freq - freqFloor;
+  _imaginaryFrequencies[freqFloor + 1] += freqFrac;
+  if (freqFloor < (_realFrequencies.length - 1)) _realFrequencies[freqFloor + 2] += (1 - freqFrac);
+  var wave = _audioContext.createPeriodicWave(_realFrequencies, _imaginaryFrequencies, {disableNormalization: false});
+
+  var oldOscillator = _oscillator;
+  _oscillator = _audioContext.createOscillator();
+  _oscillator.frequency.value = FREQUENCY_FUNDAMENTAL;
+  _oscillator.setPeriodicWave(wave);
+  _oscillator.connect(_audioContext.destination);
+  _oscillator.start(0);
+  fadeAudio(oldOscillator, _oscillator);
+}
+
 var updateAxis = (function() {
   var axisSeg = [];
   return function(evt) {
@@ -215,6 +284,12 @@ var fold = (function() {
 
   return function(evt) {
     if (!validateMouseEvent(evt)) return true;
+    // For tracking the crease
+    var vertsCreased = 0;
+    var creaseMinX = Infinity;
+    var creaseMinY = Infinity;
+    var creaseMaxX = -Infinity;
+    var creaseMaxY = -Infinity;
     // REF: https://math.stackexchange.com/questions/65503/point-reflection-over-a-line
     foldVec.copy(_inputState.lastMouseUpPosition).sub(_inputState.lastMouseDownPosition)
     var a = (foldVec.x * foldVec.x - foldVec.y * foldVec.y) / (foldVec.x * foldVec.x + foldVec.y * foldVec.y);
@@ -232,7 +307,7 @@ var fold = (function() {
                    _paperGeometry.attributes.position.array[i + 2] + _startDisplacement[i + 2]);
 
       // Check winding
-      tempVec1.copy(foldVec).cross(tempVec2.copy(paperPos).sub(_inputState.lastMouseDownPosition));
+      tempVec1.copy(foldVec).normalize().cross(tempVec2.copy(paperPos).sub(_inputState.lastMouseDownPosition));
       if (tempVec1.z > 0) {
         // Flip one side
         var newX = a * (paperPos.x - _inputState.lastMouseDownPosition.x) + b * (paperPos.y - _inputState.lastMouseDownPosition.y) + _inputState.lastMouseDownPosition.x;
@@ -244,8 +319,28 @@ var fold = (function() {
         _startDisplacement[i + 2] -= 0.1;
         _endDisplacement[i + 2] -= 0.1;
       }
+
+      // Count creased verts
+      // TODO: expose/test crease thresh?
+      if (Math.abs(tempVec1.z) < 1) {
+        vertsCreased++;
+        creaseMinX = Math.min(creaseMinX, paperPos.x);
+        creaseMinY = Math.min(creaseMinY, paperPos.y);
+        creaseMaxX = Math.max(creaseMaxX, paperPos.x);
+        creaseMaxY = Math.max(creaseMaxY, paperPos.y);
+      }
     }
+
+    // Animate
     startAnimating();
+
+    // Audiate
+    var creaseDX = creaseMaxX - creaseMinX;
+    var creaseDY = creaseMaxY - creaseMinY;
+    var creaseDiagonal = Math.sqrt(creaseDX * creaseDX + creaseDY * creaseDY)
+    // TODO: tweke these more?
+    foldAudio(0.8 * (vertsCreased / _vertCount) + 0.2 * (1 - (creaseDiagonal / PAPER_DIAGONAL)));
+
     return true;
   };
 })();
@@ -348,6 +443,7 @@ function init() {
   initMeshes();
   initRenderer();
   initWindow();
+  initAudio();
 }
 
 // Shared local variables
@@ -355,6 +451,9 @@ function init() {
 var PAPER_SIZE = 120;
 var PAPER_SEGMENTS = 400;
 var HALF_PAPER_SIZE = PAPER_SIZE / 2;
+var PAPER_DIAGONAL = PAPER_SIZE * Math.sqrt(2);
+var FREQUENCY_FUNDAMENTAL = 4;
+var FREQUENCY_RANGE = 400;
 // util constants
 var HORIZONTAL_DIR = new THREE.Vector2(1, 0);
 var VERTICAL_DIR = new THREE.Vector2(0, 1);
@@ -369,7 +468,8 @@ var _inputState = {
   lastMouseMovePosition: new THREE.Vector3(),
   lmbDown: false
 };
-var _paperGeometry,
+var _vertCount,
+    _paperGeometry,
     _axisGeometry,
     _startDisplacement,
     _endDisplacement,
@@ -398,6 +498,11 @@ var _normalsPassMaterial,
 var _tempTargetA,
     _tempTargetB,
     _foldAccumulationTarget;
+// audio
+var _audioContext,
+    _oscillator,
+    _realFrequencies,
+    _imaginaryFrequencies;
 
 init();
 tick();
