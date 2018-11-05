@@ -13,7 +13,9 @@
 //    o Expose edge thickness control?
 //    o Combine event handlers?
 //    o Framerate???
-//    o SOUNDS!!!!!!!!!
+//    o Sound: remap fade to be nonlinear?
+//    o Sound: add more degs of freedom...this is samey (distortion?)?
+//    o Expose sound controls?
 
 //////////////////////////////////////////////////////////////////
 // INIT //////////////////////////////////////////////////////////
@@ -236,7 +238,6 @@ function fadeAudio(startSrc, endSrc, startTime, startGain, endGain) {
       endGain.gain.value = 1;
     }
   } else {
-    // TODO: remap t?
     if (startGain) startGain.gain.value = 1 - t;
     if (endGain) endGain.gain.value = t;
     requestAnimationFrame(fadeAudio.bind(null, startSrc, endSrc, startTime, startGain, endGain));
@@ -248,13 +249,11 @@ function stopAudio(evt) {
 }
 
 function foldAudio(freq) {
-  // TODO: add more degs of freedom...this is samey (distortion?)
-  freq = Math.max(Math.min(freq * FREQUENCY_RANGE - 1, _imaginaryFrequencies.length - 1), 0);
-  if (freq === 0 || freq === 1) return;
+  freq = Math.max(freq * (FREQUENCY_RANGE - 1), 0);
   var freqFloor = Math.floor(freq);
   var freqFrac = freq - freqFloor;
-  _imaginaryFrequencies[freqFloor + 1] += freqFrac;
-  if (freqFloor < (_realFrequencies.length - 1)) _realFrequencies[freqFloor + 2] += (1 - freqFrac);
+  _imaginaryFrequencies[freqFloor + 1] += 1 - freqFrac;
+  _realFrequencies[freqFloor + 2] += freqFrac; // TODO: does this vs imag matter?
   var wave = _audioContext.createPeriodicWave(_realFrequencies, _imaginaryFrequencies, {disableNormalization: false});
 
   var oldOscillator = _oscillator;
