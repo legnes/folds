@@ -2,6 +2,7 @@
 // REF: https://threejs.org/examples/#webgl_custom_attributes
 // TODO:
 //    o Implement crumple
+//    o Fix Zs so its actually the right thickness?
 //    o Combine displacement attributes
 //    o Replace UV with pic/something else
 //    o Tweak edge and/or blur?
@@ -13,9 +14,10 @@
 //    o Expose edge thickness control?
 //    o Combine event handlers?
 //    o Framerate???
+//    o Fix line turning invisible when you zoom in too much
 //    o Sound: remap fade to be nonlinear?
 //    o Sound: add more degs of freedom...this is samey (distortion?)?
-//    o Expose sound controls?
+//    o Sound: expose sound controls?
 
 //////////////////////////////////////////////////////////////////
 // INIT //////////////////////////////////////////////////////////
@@ -208,40 +210,36 @@ function trackMouseEvent(stateProperty, evt) {
   return true;
 }
 
-function fadeAudio(startSrc, endSrc, startTime, startGain, endGain) {
-  if (!startTime) {
-    startTime = Date.now();
-    if (startSrc) {
-      startGain = _audioContext.createGain();
-      startGain.gain.value = 1;
-      startSrc.disconnect();
-      startSrc.connect(startGain);
-      startGain.connect(_audioContext.destination);
-    }
-    if (endSrc) {
-      endGain = _audioContext.createGain();
-      endGain.gain.value = 0;
-      endSrc.disconnect();
-      endSrc.connect(endGain);
-      endGain.connect(_audioContext.destination);
-    }
+function fadeAudio(startSrc, endSrc, duration) {
+  duration = duration || 1;
+
+  if (startSrc) {
+    console.log('ramping start down');
+    startGain = _audioContext.createGain();
+    startGain.gain.value = 1;
+    startSrc.disconnect();
+    startSrc.connect(startGain);
+    startGain.connect(_audioContext.destination);
+    startGain.gain.linearRampToValueAtTime(0.00001, _audioContext.currentTime + duration);
   }
 
-  var t = (Date.now() - startTime) / 1000;
+  if (endSrc) {
+    console.log('ramping end up');
+    endGain = _audioContext.createGain();
+    endGain.gain.value = 0;
+    endSrc.disconnect();
+    endSrc.connect(endGain);
+    endGain.connect(_audioContext.destination);
+    endGain.gain.linearRampToValueAtTime(1.0, _audioContext.currentTime + duration);
+  }
 
-  if (t >= 1) {
+  setTimeout(function() {
     if (startSrc) {
       startSrc.stop(0);
       startSrc.disconnect();
+      startGain.disconnect();
     }
-    if (endGain) {
-      endGain.gain.value = 1;
-    }
-  } else {
-    if (startGain) startGain.gain.value = 1 - t;
-    if (endGain) endGain.gain.value = t;
-    requestAnimationFrame(fadeAudio.bind(null, startSrc, endSrc, startTime, startGain, endGain));
-  }
+  }, duration * 1000);
 }
 
 function stopAudio(evt) {
@@ -249,7 +247,8 @@ function stopAudio(evt) {
 }
 
 function foldAudio(freq) {
-  freq = Math.max(freq * (FREQUENCY_RANGE - 1), 0);
+  if (freq === 0) return;
+  freq = freq * (FREQUENCY_RANGE - 1);
   var freqFloor = Math.floor(freq);
   var freqFrac = freq - freqFloor;
   _imaginaryFrequencies[freqFloor + 1] += 1 - freqFrac;
