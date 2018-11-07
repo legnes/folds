@@ -3,31 +3,37 @@
 // TODO:
 //    o Implement crumple
 //    o Fix Zs so its actually the right thickness?
-//    o Combine displacement attributes
+//    o Fix line turning invisible when you zoom in too much + over/under plane???
 //    o Replace UV with pic/something else
-//    o Tweak edge and/or blur?
-//    o Tweak paper frag?
-//    o Switch between linear and nearest filters on temp targets?
-//    o Smarter normals? (octahedron encoding + float32 --> int8,8)
-//    o Fix edge center shadow
-//    o Expose paper size/shape/segments in inputs?
-//    o Expose edge thickness control?
-//    o Combine event handlers?
-//    o Framerate???
-//    o Fix line turning invisible when you zoom in too much
-//    o Sound: remap fade to be nonlinear?
+//    o Real finer paper pass w lighting affected by folds
 //    o Sound: add more degs of freedom...this is samey (distortion?)?
-//    o Sound: expose sound controls?
+//    o Sound: add dynamics pulse?
+//    o Framerate?????????
+//    o Combine event handlers?
+//    o Switch between linear and nearest filters on temp targets?
+//    o Tweak paper frag?
+//    o Combine displacement attributes?
+//    o Mention CONTROLS/shift+click+drag to rotate somewhere
 
 //////////////////////////////////////////////////////////////////
 // INIT //////////////////////////////////////////////////////////
 function initInputs() {
   _inputs = {
-    visualizePass: 'final'
+    visualizePass: 'final',
+    frequencyFundamental: 4,
+    frequencyRange: MAX_FREQUENCY_RANGE,
+    stopAudio: stopAudio.bind(null, null, true),
+    unfold: unfoldPaper.bind(null, null, true),
+    reset: resetPaperAudio.bind(null, null, true)
   };
 
   var gui = new dat.GUI();
   gui.add(_inputs, 'visualizePass', ['normals', 'edges', 'blur1', 'blur2', 'composite', 'final']);
+  gui.add(_inputs, 'frequencyFundamental', 2, 110).step(1).onChange(function(val) { if (_oscillator) _oscillator.frequency.value = val; });
+  gui.add(_inputs, 'frequencyRange', 2, MAX_FREQUENCY_RANGE).step(1);
+  gui.add(_inputs, 'stopAudio');
+  gui.add(_inputs, 'unfold');
+  gui.add(_inputs, 'reset');
 }
 
 function initCameras() {
@@ -136,6 +142,7 @@ function initMeshes() {
 
   _axisGeometry = new THREE.BufferGeometry().setFromPoints([[0, 0, 0], [0, 0, 0]]);
   _axisMesh = new THREE.Line(_axisGeometry, new THREE.LineDashedMaterial({color: 0x88ff88, dashSize: 1, gapSize: 1 }));
+  // _axisMesh = new THREE.Line(_axisGeometry, new THREE.LineBasicMaterial({color: 0x88ff88, dashSize: 1, gapSize: 1 }));
   _axisMesh.computeLineDistances();
 }
 
@@ -154,16 +161,16 @@ function initWindow() {
   window.addEventListener('mousedown', trackMouseEvent.bind(null, 'lastMouseDownPosition'));
   window.addEventListener('mouseup', trackMouseEvent.bind(null, 'lastMouseUpPosition'));
   window.addEventListener('mousemove', trackMouseEvent.bind(null, 'lastMouseMovePosition'));
-  window.addEventListener('mouseup', fold);
-  window.addEventListener('keypress', unfold);
+  window.addEventListener('mouseup', foldPaper);
+  window.addEventListener('keypress', unfoldPaper);
   window.addEventListener('mousedown', updateAxis);
   window.addEventListener('mousemove', updateAxis);
   window.addEventListener('keypress', stopAudio);
 }
 
 function initAudio() {
-  _realFrequencies = new Float32Array(FREQUENCY_RANGE + 1);
-  _imaginaryFrequencies = new Float32Array(FREQUENCY_RANGE + 1);
+  _realFrequencies = new Float32Array(MAX_FREQUENCY_RANGE + 1);
+  _imaginaryFrequencies = new Float32Array(MAX_FREQUENCY_RANGE + 1);
   _audioContext = new AudioContext();
 }
 // INIT //////////////////////////////////////////////////////////
@@ -210,11 +217,33 @@ function trackMouseEvent(stateProperty, evt) {
   return true;
 }
 
+function resetPaperAudio(evt, force) {
+  if (!force) return;
+  // reset audio
+  stopAudio(null, true);
+  for (var i = 0; i < MAX_FREQUENCY_RANGE; i++) {
+    _imaginaryFrequencies[i] = 0;
+    _realFrequencies[i] = 0;
+  }
+
+  // clear fold marks
+  _forceClear = true;
+  setTimeout(function() {
+    _forceClear = false;
+  }, 1000);
+
+  // unfold paper
+  unfoldPaper(null, true);
+}
+
+function stopAudio(evt, force) {
+  if ((evt && evt.key === 'm') || force) fadeAudio(_oscillator);
+}
+
 function fadeAudio(startSrc, endSrc, duration) {
   duration = duration || 1;
 
   if (startSrc) {
-    console.log('ramping start down');
     startGain = _audioContext.createGain();
     startGain.gain.value = 1;
     startSrc.disconnect();
@@ -224,7 +253,6 @@ function fadeAudio(startSrc, endSrc, duration) {
   }
 
   if (endSrc) {
-    console.log('ramping end up');
     endGain = _audioContext.createGain();
     endGain.gain.value = 0;
     endSrc.disconnect();
@@ -242,13 +270,9 @@ function fadeAudio(startSrc, endSrc, duration) {
   }, duration * 1000);
 }
 
-function stopAudio(evt) {
-  if (evt.key === 'm') fadeAudio(_oscillator);
-}
-
 function foldAudio(freq) {
   if (freq === 0) return;
-  freq = freq * (FREQUENCY_RANGE - 1);
+  freq = freq * (_inputs.frequencyRange - 1);
   var freqFloor = Math.floor(freq);
   var freqFrac = freq - freqFloor;
   _imaginaryFrequencies[freqFloor + 1] += 1 - freqFrac;
@@ -257,7 +281,7 @@ function foldAudio(freq) {
 
   var oldOscillator = _oscillator;
   _oscillator = _audioContext.createOscillator();
-  _oscillator.frequency.value = FREQUENCY_FUNDAMENTAL;
+  _oscillator.frequency.value = _inputs.frequencyFundamental;
   _oscillator.setPeriodicWave(wave);
   _oscillator.connect(_audioContext.destination);
   _oscillator.start(0);
@@ -274,7 +298,21 @@ var updateAxis = (function() {
   };
 })();
 
-var fold = (function() {
+function unfoldPaper(evt, force) {
+  if ((evt && evt.key !== ' ') && !force) return;
+  for (var i = 0; i < (_startDisplacement.length - 2); i += 3) {
+    _startDisplacement[i + 0] = _endDisplacement[i + 0];
+    _startDisplacement[i + 1] = _endDisplacement[i + 1];
+    _startDisplacement[i + 2] = _endDisplacement[i + 2];
+    _endDisplacement[i + 0] = 0;
+    _endDisplacement[i + 1] = 0;
+    _endDisplacement[i + 2] = 0;
+  }
+  startAnimating();
+  return true;
+}
+
+var foldPaper = (function() {
   var paperPos = new THREE.Vector3();
   var foldVec = new THREE.Vector3();
   var tempVec1 = new THREE.Vector3();
@@ -282,14 +320,18 @@ var fold = (function() {
 
   return function(evt) {
     if (!validateMouseEvent(evt)) return true;
+
+    foldVec.copy(_inputState.lastMouseUpPosition).sub(_inputState.lastMouseDownPosition);
+    if (foldVec.length() < 0.1) return true;
+
     // For tracking the crease
     var vertsCreased = 0;
     var creaseMinX = Infinity;
     var creaseMinY = Infinity;
     var creaseMaxX = -Infinity;
     var creaseMaxY = -Infinity;
+
     // REF: https://math.stackexchange.com/questions/65503/point-reflection-over-a-line
-    foldVec.copy(_inputState.lastMouseUpPosition).sub(_inputState.lastMouseDownPosition)
     var a = (foldVec.x * foldVec.x - foldVec.y * foldVec.y) / (foldVec.x * foldVec.x + foldVec.y * foldVec.y);
     var b = 2 * foldVec.x * foldVec.y / (foldVec.x * foldVec.x + foldVec.y * foldVec.y);
 
@@ -343,20 +385,6 @@ var fold = (function() {
   };
 })();
 
-function unfold(evt) {
-  if (evt.key !== ' ') return;
-  for (var i = 0; i < (_startDisplacement.length - 2); i += 3) {
-    _startDisplacement[i + 0] = _endDisplacement[i + 0];
-    _startDisplacement[i + 1] = _endDisplacement[i + 1];
-    _startDisplacement[i + 2] = _endDisplacement[i + 2];
-    _endDisplacement[i + 0] = 0;
-    _endDisplacement[i + 1] = 0;
-    _endDisplacement[i + 2] = 0;
-  }
-  startAnimating();
-  return true;
-}
-
 function startAnimating() {
   _animationStartTime = Date.now();
   _paperMesh.geometry.attributes.aDisplacementStart.needsUpdate = true;
@@ -405,7 +433,7 @@ function render() {
   _blurPassMaterial.blendEquation = THREE.MaxEquation;
   _blurPassMaterial.blendSrc = THREE.OneFactor;
   _blurPassMaterial.blendDst = THREE.OneFactor;
-  _renderer.render(_fullScreenQuadScene, _fullScreenQuadOrthoCamera, _foldAccumulationTarget, false);
+  _renderer.render(_fullScreenQuadScene, _fullScreenQuadOrthoCamera, _foldAccumulationTarget, _forceClear);
   if (_inputs.visualizePass === 'blur2') return displayTarget(_foldAccumulationTarget);
 
   _fullScreenQuadMesh.material = _uvPassMaterial;
@@ -450,8 +478,7 @@ var PAPER_SIZE = 120;
 var PAPER_SEGMENTS = 400;
 var HALF_PAPER_SIZE = PAPER_SIZE / 2;
 var PAPER_DIAGONAL = PAPER_SIZE * Math.sqrt(2);
-var FREQUENCY_FUNDAMENTAL = 4;
-var FREQUENCY_RANGE = 400;
+var MAX_FREQUENCY_RANGE = 400;
 // util constants
 var HORIZONTAL_DIR = new THREE.Vector2(1, 0);
 var VERTICAL_DIR = new THREE.Vector2(0, 1);
@@ -473,7 +500,8 @@ var _vertCount,
     _endDisplacement,
     _animationStartTime;
 // rendering
-var _renderer;
+var _renderer,
+    _forceClear = false;
 // paper
 var _paperMesh,
     _axisMesh,
