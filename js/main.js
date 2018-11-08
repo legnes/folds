@@ -2,7 +2,6 @@
 // REF: https://threejs.org/examples/#webgl_custom_attributes
 // TODO:
 //    o Some sorta crumple?
-//    o Replace UV with pic/something else
 //    o Framerate/Usage??????????????????????????????????
 //    o Real finer paper pass w lighting affected by folds
 //    o Conditionally update uniforms etc
@@ -16,6 +15,8 @@ function initInputs() {
   _inputs = {
     visualizePass: 'final',
     paperSize: 'square',
+    paperTexture: 'courtyard',
+    showUV: false,
     frequencyFundamental: 4,
     frequencyRange: MAX_FREQUENCY_RANGE,
     stopAudio: stopAudio.bind(null, null, true),
@@ -26,6 +27,8 @@ function initInputs() {
   var gui = new dat.GUI();
   gui.add(_inputs, 'visualizePass', ['normals', 'edges', 'blur1', 'blur2', 'composite', 'final']);
   gui.add(_inputs, 'paperSize', ['square', 'postcard', '8.5x11']).onChange(resetPaper);
+  gui.add(_inputs, 'paperTexture', ['courtyard', 'blue_wall', 'house', 'boys']).onChange(function(val) { initTextures(); _paperTexturePassMaterial.uniforms.uSource.value = _paperTexture; });
+  gui.add(_inputs, 'showUV');
   gui.add(_inputs, 'frequencyFundamental', 2, 110).step(1).onChange(function(val) { if (_oscillator) _oscillator.frequency.value = val; });
   gui.add(_inputs, 'frequencyRange', 2, MAX_FREQUENCY_RANGE).step(1);
   gui.add(_inputs, 'stopAudio');
@@ -80,6 +83,11 @@ function initTargets() {
   _foldAccumulationTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { magFilter: THREE.NearestFilter, minFilter: THREE.NearestFilter });
 }
 
+function initTextures() {
+  _paperTexture = new THREE.TextureLoader().load('assets/' + _inputs.paperTexture + '.JPG');
+  _paperTexture.flipY = false;
+}
+
 function initMaterials() {
   // NOTE: Assumes shaders are in global scope
   _normalsPassMaterial = new THREE.ShaderMaterial({
@@ -118,6 +126,14 @@ function initMaterials() {
     },
     vertexShader: fullScreenQuad_vert,
     fragmentShader: displayUV_frag
+  });
+
+  _paperTexturePassMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      uSource: { value: _paperTexture }
+    },
+    vertexShader: fullScreenQuad_vert,
+    fragmentShader: displayTexture_frag
   });
 
   _foldPassMaterial = new THREE.ShaderMaterial({
@@ -480,7 +496,7 @@ function render() {
   _renderer.render(_fullScreenQuadScene, _fullScreenQuadOrthoCamera, _foldAccumulationTarget, _forceClear);
   if (_inputs.visualizePass === 'blur2') return displayTarget(_foldAccumulationTarget);
 
-  _fullScreenQuadMesh.material = _uvPassMaterial;
+  _fullScreenQuadMesh.material = _inputs.showUV ? _uvPassMaterial : _paperTexturePassMaterial;
   _renderer.render(_fullScreenQuadScene, _fullScreenQuadOrthoCamera, _tempTargetA, true);
 
   _fullScreenQuadMesh.material = _foldPassMaterial;
@@ -511,6 +527,7 @@ function init() {
   initControls();
   initScenes();
   initTargets();
+  initTextures();
   initMaterials();
   initMeshes();
   initRenderer();
@@ -561,11 +578,14 @@ var _paperMesh,
 var _fullScreenQuadMesh,
     _fullScreenQuadScene,
     _fullScreenQuadOrthoCamera;
+// textures
+var _paperTexture;
 // materials
 var _normalsPassMaterial,
     _edgesPassMaterial,
     _blurPassMaterial,
     _uvPassMaterial,
+    _paperTexturePassMaterial,
     _foldPassMaterial,
     _paperPassMaterial;
 // targets
