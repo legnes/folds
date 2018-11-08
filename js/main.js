@@ -1,17 +1,12 @@
 (function() {
 // REF: https://threejs.org/examples/#webgl_custom_attributes
 // TODO:
-//    o Implement crumple
-//    o Fix Zs so its actually the right thickness?
-//    o Fix line turning invisible when you zoom in too much + over/under plane???
+//    o Some sorta crumple?
 //    o Replace UV with pic/something else
+//    o Framerate/Usage??????????????????????????????????
 //    o Real finer paper pass w lighting affected by folds
-//    o Sound: add more degs of freedom...this is samey (distortion?)?
-//    o Sound: add dynamics pulse?
-//    o Framerate?????????
+//    o Conditionally update uniforms etc
 //    o Combine event handlers?
-//    o Switch between linear and nearest filters on temp targets?
-//    o Tweak paper frag?
 //    o Combine displacement attributes?
 //    o Mention CONTROLS/shift+click+drag to rotate somewhere
 
@@ -20,6 +15,7 @@
 function initInputs() {
   _inputs = {
     visualizePass: 'final',
+    paperSize: 'square',
     frequencyFundamental: 4,
     frequencyRange: MAX_FREQUENCY_RANGE,
     stopAudio: stopAudio.bind(null, null, true),
@@ -29,6 +25,7 @@ function initInputs() {
 
   var gui = new dat.GUI();
   gui.add(_inputs, 'visualizePass', ['normals', 'edges', 'blur1', 'blur2', 'composite', 'final']);
+  gui.add(_inputs, 'paperSize', ['square', 'postcard', '8.5x11']).onChange(resetPaper);
   gui.add(_inputs, 'frequencyFundamental', 2, 110).step(1).onChange(function(val) { if (_oscillator) _oscillator.frequency.value = val; });
   gui.add(_inputs, 'frequencyRange', 2, MAX_FREQUENCY_RANGE).step(1);
   gui.add(_inputs, 'stopAudio');
@@ -36,8 +33,28 @@ function initInputs() {
   gui.add(_inputs, 'reset');
 }
 
+function initPaperSize() {
+  switch(_inputs.paperSize) {
+    case 'square':
+      _paperSizeX = 120;
+      _paperSizeY = 120;
+      break;
+    case 'postcard':
+      _paperSizeX = 148;
+      _paperSizeY = 106;
+      break;
+    case '8.5x11':
+      _paperSizeX = 108;
+      _paperSizeY = 140;
+      break;
+  }
+  _halfPaperSizeX = _paperSizeX / 2;
+  _halfPaperSizeY = _paperSizeY / 2;
+  _paperDiagonal = Math.sqrt(_paperSizeX * _paperSizeX + _paperSizeY * _paperSizeY);
+}
+
 function initCameras() {
-  _paperOrthoCamera = new THREE.OrthographicCamera(-HALF_PAPER_SIZE, HALF_PAPER_SIZE, HALF_PAPER_SIZE, -HALF_PAPER_SIZE, 1, 10000);
+  _paperOrthoCamera = new THREE.OrthographicCamera(-_halfPaperSizeX, _halfPaperSizeX, _halfPaperSizeY, -_halfPaperSizeY, 1, 10000);
   _paperOrthoCamera.position.z = 300;
 
   _paperPerspectiveCamera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 1, 10000);
@@ -128,7 +145,7 @@ function initMaterials() {
 }
 
 function initMeshes() {
-  _paperGeometry = new THREE.PlaneBufferGeometry(PAPER_SIZE, PAPER_SIZE, PAPER_SEGMENTS, PAPER_SEGMENTS);
+  _paperGeometry = new THREE.PlaneBufferGeometry(_paperSizeX, _paperSizeY, PAPER_SEGMENTS, PAPER_SEGMENTS);
   _vertCount = _paperGeometry.attributes.position.count;
   _startDisplacement = new Float32Array(_vertCount * 3);
   _endDisplacement = new Float32Array(_vertCount * 3);
@@ -172,6 +189,22 @@ function initAudio() {
   _realFrequencies = new Float32Array(MAX_FREQUENCY_RANGE + 1);
   _imaginaryFrequencies = new Float32Array(MAX_FREQUENCY_RANGE + 1);
   _audioContext = new AudioContext();
+
+  // Noise
+  // These numbers are all completely made up
+  var noiseBuffer = _audioContext.createBuffer(1, 0.3 * _audioContext.sampleRate, _audioContext.sampleRate);
+  var channelData = noiseBuffer.getChannelData(0);
+  for (var i = 0, len = channelData.length; i < len; i++) {
+    channelData[i] = (Math.random() * 2 - 1) * (Math.sin(2 * Math.PI * i / channelData.length) * 0.5 + 0.5 + 2.0);
+  }
+  _noise = _audioContext.createBufferSource();
+  _noise.buffer = noiseBuffer;
+  _noise.loop = true;
+  _noise.start(0);
+  var noiseGain = _audioContext.createGain();
+  noiseGain.gain.value = 0.001;
+  _noise.connect(noiseGain);
+  _noise = noiseGain;
 }
 // INIT //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
@@ -217,6 +250,16 @@ function trackMouseEvent(stateProperty, evt) {
   return true;
 }
 
+function resetPaper() {
+  resetPaperAudio(null, true);
+  initPaperSize();
+  initCameras();
+  initControls();
+  _paperScene.remove(_paperMesh);
+  _fullScreenQuadScene.remove(_fullScreenQuadMesh);
+  initMeshes();
+}
+
 function resetPaperAudio(evt, force) {
   if (!force) return;
   // reset audio
@@ -259,6 +302,7 @@ function fadeAudio(startSrc, endSrc, duration) {
     endSrc.connect(endGain);
     endGain.connect(_audioContext.destination);
     endGain.gain.linearRampToValueAtTime(1.0, _audioContext.currentTime + duration);
+    _noise.connect(_audioContext.destination);
   }
 
   setTimeout(function() {
@@ -266,6 +310,7 @@ function fadeAudio(startSrc, endSrc, duration) {
       startSrc.stop(0);
       startSrc.disconnect();
       startGain.disconnect();
+      if (!endSrc) _noise.disconnect();
     }
   }, duration * 1000);
 }
@@ -361,7 +406,6 @@ var foldPaper = (function() {
       }
 
       // Count creased verts
-      // TODO: expose/test crease thresh?
       if (Math.abs(tempVec1.z) < 1) {
         vertsCreased++;
         creaseMinX = Math.min(creaseMinX, paperPos.x);
@@ -379,7 +423,7 @@ var foldPaper = (function() {
     var creaseDY = creaseMaxY - creaseMinY;
     var creaseDiagonal = Math.sqrt(creaseDX * creaseDX + creaseDY * creaseDY)
     // TODO: tweke these more?
-    foldAudio(0.8 * (vertsCreased / _vertCount) + 0.2 * (1 - (creaseDiagonal / PAPER_DIAGONAL)));
+    foldAudio(0.8 * (vertsCreased / _vertCount) + 0.2 * (1 - (creaseDiagonal / _paperDiagonal)));
 
     return true;
   };
@@ -444,6 +488,7 @@ function render() {
   _renderer.render(_fullScreenQuadScene, _fullScreenQuadOrthoCamera, _tempTargetA, false);
   if (_inputs.visualizePass === 'composite') return displayTarget(_tempTargetA);
 
+  // TODO: The to-screen pass seems to destroy performance???
   _paperMesh.material = _paperPassMaterial;
   _paperPassMaterial.uniforms.uSource.value = _tempTargetA.texture;
   _paperPassMaterial.uniforms.uTime.value = animationDeltaTime;
@@ -461,6 +506,7 @@ function tick() {
 
 function init() {
   initInputs();
+  initPaperSize();
   initCameras();
   initControls();
   initScenes();
@@ -474,10 +520,7 @@ function init() {
 
 // Shared local variables
 // settings
-var PAPER_SIZE = 120;
 var PAPER_SEGMENTS = 400;
-var HALF_PAPER_SIZE = PAPER_SIZE / 2;
-var PAPER_DIAGONAL = PAPER_SIZE * Math.sqrt(2);
 var MAX_FREQUENCY_RANGE = 400;
 // util constants
 var HORIZONTAL_DIR = new THREE.Vector2(1, 0);
@@ -493,7 +536,12 @@ var _inputState = {
   lastMouseMovePosition: new THREE.Vector3(),
   lmbDown: false
 };
-var _vertCount,
+var _paperSizeX,
+    _paperSizeY,
+    _halfPaperSizeX,
+    _halfPaperSizeY,
+    _paperDiagonal,
+    _vertCount,
     _paperGeometry,
     _axisGeometry,
     _startDisplacement,
@@ -528,7 +576,8 @@ var _tempTargetA,
 var _audioContext,
     _oscillator,
     _realFrequencies,
-    _imaginaryFrequencies;
+    _imaginaryFrequencies,
+    _noise;
 
 init();
 tick();
