@@ -8,6 +8,7 @@
 //    o Combine event handlers?
 //    o Combine displacement attributes?
 //    o Mention CONTROLS/shift+click+drag to rotate somewhere
+//    o Optimize image loading
 
 //////////////////////////////////////////////////////////////////
 // INIT //////////////////////////////////////////////////////////
@@ -27,7 +28,7 @@ function initInputs() {
   var gui = new dat.GUI();
   gui.add(_inputs, 'visualizePass', ['normals', 'edges', 'blur1', 'blur2', 'composite', 'final']);
   gui.add(_inputs, 'paperSize', ['square', 'postcard', '8.5x11']).onChange(resetPaper);
-  gui.add(_inputs, 'paperTexture', ['courtyard', 'blue_wall', 'house', 'boys']).onChange(function(val) { initTextures(); _paperTexturePassMaterial.uniforms.uSource.value = _paperTexture; });
+  gui.add(_inputs, 'paperTexture', ['courtyard', 'blue_wall', 'house']).onChange(function(val) { initTextures(); _paperTexturePassMaterial.uniforms.uSource.value = _paperTexture; });
   gui.add(_inputs, 'showUV');
   gui.add(_inputs, 'frequencyFundamental', 2, 110).step(1).onChange(function(val) { if (_oscillator) _oscillator.frequency.value = val; });
   gui.add(_inputs, 'frequencyRange', 2, MAX_FREQUENCY_RANGE).step(1);
