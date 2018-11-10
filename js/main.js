@@ -8,7 +8,6 @@
 //    o Combine event handlers?
 //    o Combine displacement attributes?
 //    o Mention CONTROLS/shift+click+drag to rotate somewhere
-//    o Optimize image loading
 
 //////////////////////////////////////////////////////////////////
 // INIT //////////////////////////////////////////////////////////
@@ -86,7 +85,7 @@ function initTargets() {
 
 function initTextures() {
   _paperTexture = new THREE.TextureLoader().load('assets/' + _inputs.paperTexture + '.JPG');
-  _paperTexture.flipY = false;
+  _paperTexture.flipY = true;
 }
 
 function initMaterials() {
